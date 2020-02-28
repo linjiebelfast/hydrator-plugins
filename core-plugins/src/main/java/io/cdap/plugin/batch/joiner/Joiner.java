@@ -81,7 +81,12 @@ public class Joiner extends BatchJoiner<StructuredRecord, StructuredRecord, Stru
     FailureCollector collector = pipelineConfigurer.getMultiInputStageConfigurer().getFailureCollector();
     init(inputSchemas, collector);
     collector.getOrThrowException();
-    //validate the input schema and get the output schema for it
+    if (!inputSchemasAvailable(inputSchemas) && !conf.containsMacro(conf.OUTPUT_SCHEMA) &&
+        conf.getOutputSchema(collector) == null) {
+      // If input schemas are unknown, an output schema must be provided.
+      collector.addFailure("Output schema must be specified", null).withConfigProperty(conf.OUTPUT_SCHEMA);
+    }
+
     Schema outputSchema = getOutputSchema(inputSchemas, collector);
     if (outputSchema != null) {
       // Set output schema if it's not a macro.
@@ -96,14 +101,16 @@ public class Joiner extends BatchJoiner<StructuredRecord, StructuredRecord, Stru
     }
     FailureCollector collector = context.getFailureCollector();
     Map<String, Schema> inputSchemas = context.getInputSchemas();
-    // inputSchemas will be empty if the output schema of the previous node is a macro
-    if (!inputSchemas.isEmpty()) {
-      init(inputSchemas, collector);
-      collector.getOrThrowException();
-      Collection<OutputFieldInfo> outputFieldInfos = createOutputFieldInfos(inputSchemas, collector);
-      collector.getOrThrowException();
-      context.record(createFieldOperations(outputFieldInfos, perStageJoinKeys));
+    if (!inputSchemasAvailable(inputSchemas)) {
+      // inputSchemas will be empty if the output schema of a previous node is a macro
+      return;
     }
+
+    init(inputSchemas, collector);
+    collector.getOrThrowException();
+    Collection<OutputFieldInfo> outputFieldInfos = createOutputFieldInfos(inputSchemas, collector);
+    collector.getOrThrowException();
+    context.record(createFieldOperations(outputFieldInfos, perStageJoinKeys));
   }
 
   /**
@@ -182,13 +189,6 @@ public class Joiner extends BatchJoiner<StructuredRecord, StructuredRecord, Stru
     init(inputSchemas, collector);
     collector.getOrThrowException();
     outputSchema = getOutputSchema(inputSchemas, collector);
-    if (outputSchema == null) {
-      // Could not derive output schema from input schema. Try to get output schema from config.
-      outputSchema = conf.getOutputSchema(collector);
-      if (outputSchema == null) {
-        collector.addFailure("Output schema must be specified", null).withConfigProperty(conf.OUTPUT_SCHEMA);
-      }
-    }
     collector.getOrThrowException();
   }
 
@@ -291,7 +291,8 @@ public class Joiner extends BatchJoiner<StructuredRecord, StructuredRecord, Stru
     duplicateFields = ArrayListMultimap.create();
     List<Schema.Field> outputFields = getOutputFields(createOutputFieldInfos(inputSchemas, collector));
     if (outputFields.isEmpty()) {
-      return null;
+      // Could not derive output schema from input schema. Try to get output schema from config.
+      return conf.getOutputSchema(collector);
     } else {
       return Schema.recordOf("join.output", outputFields);
     }
@@ -308,8 +309,8 @@ public class Joiner extends BatchJoiner<StructuredRecord, StructuredRecord, Stru
     Map<String, OutputFieldInfo> outputFieldInfo = new LinkedHashMap<>();
     List<String> duplicateAliases = new ArrayList<>();
 
-    if (inputSchemas.isEmpty()) {
-      // inputSchemas will be empty if the output schema of the previous node is a macro
+    if (!inputSchemasAvailable(inputSchemas)) {
+      // inputSchemas will be empty if the output schema of a previous node is a macro
       return outputFieldInfo.values();
     }
 
@@ -360,6 +361,13 @@ public class Joiner extends BatchJoiner<StructuredRecord, StructuredRecord, Stru
     }
 
     return outputFieldInfo.values();
+  }
+  private boolean inputSchemasAvailable(Map<String, Schema> inputSchemas) {
+    // TODO: Remove isEmpty() check when CDAP-16351 is fixed
+    if (inputSchemas.isEmpty() || inputSchemas.values().stream().anyMatch(v -> v == null)) {
+      return false;
+    }
+    return true;
   }
 
   private List<Schema.Field> getOutputFields(Collection<OutputFieldInfo> fieldsInfo) {

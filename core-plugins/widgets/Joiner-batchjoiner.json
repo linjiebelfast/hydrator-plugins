@@ -48,20 +48,7 @@
   "outputs": [
     {
       "name": "schema",
-      "widget-type": "schema",
-      "widget-attributes": {
-        "schema-types": [
-          "boolean",
-          "int",
-          "long",
-          "float",
-          "double",
-          "bytes",
-          "string",
-          "array"
-        ],
-        "schema-default-type": "string"
-      }
+      "widget-type": "schema"
     }
 
   ]
